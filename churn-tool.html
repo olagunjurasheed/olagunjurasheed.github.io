@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Customer Pulse — Churn Risk Analyzer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#0E1420; --panel:#141C2B; --line:#243044; --ink:#EAEFF7; --muted:#8B98AC;
+  --good:#3FB68B; --warn:#E3A23C; --bad:#E0654F; --accent:#5B8CFF;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;background:var(--bg);color:var(--ink);}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);}
+.wrap{max-width:920px;margin:0 auto;padding:28px 20px 60px;}
+h1{font-size:24px;font-weight:600;margin:0 0 4px;}
+.sub{color:var(--muted);font-size:14px;margin-bottom:26px;max-width:64ch;line-height:1.5;}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px;margin-bottom:18px;}
+.drop{border:1.5px dashed var(--line);border-radius:10px;padding:36px 20px;text-align:center;cursor:pointer;}
+.drop:hover,.drop.drag{border-color:var(--accent);}
+.drop input{display:none;}
+.drop .big{font-size:15px;margin-bottom:6px;}
+.drop .small{font-size:12px;color:var(--muted);}
+.map-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
+.map-row label{font-size:13px;color:var(--muted);min-width:170px;}
+select{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:9px 10px;font-size:14px;flex:1;min-width:160px;}
+button{background:var(--accent);color:#fff;border:none;border-radius:7px;padding:11px 20px;font-size:14px;font-weight:600;cursor:pointer;}
+button:hover{opacity:.9;}
+button:disabled{opacity:.5;cursor:default;}
+button.ghost{background:transparent;border:1px solid var(--line);color:var(--ink);}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-bottom:18px;}
+.kpi .n{font-size:26px;font-weight:700;}
+.kpi .l{font-size:12px;color:var(--muted);margin-top:2px;}
+.kpi.good .n{color:var(--good);} .kpi.warn .n{color:var(--warn);} .kpi.bad .n{color:var(--bad);}
+canvas{max-height:280px;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);}
+th{color:var(--muted);font-weight:500;font-size:12px;}
+.tag{padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;}
+.tag.bad{background:rgba(224,101,79,.15);color:var(--bad);}
+.tag.warn{background:rgba(227,162,60,.15);color:var(--warn);}
+.tag.good{background:rgba(63,182,139,.15);color:var(--good);}
+.hidden{display:none;}
+.note{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.5;}
+.tablewrap{overflow-x:auto;}
+.tabs{display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid var(--line);}
+.tab{padding:10px 14px;font-size:14px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;}
+.tab.active{color:var(--ink);border-bottom-color:var(--accent);}
+.view{display:none;} .view.active{display:block;}
+.ai-box{white-space:pre-wrap;font-size:14px;line-height:1.65;color:var(--ink);}
+.ai-loading{color:var(--muted);font-size:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Customer Pulse</h1>
+  <p class="sub">Upload a customer CSV to see who's active, who's slipping away, and get an AI-written breakdown of what's going on. Data stays in your browser until you choose to generate AI insights.</p>
+
+  <div class="card" id="uploadCard">
+    <div class="drop" id="drop">
+      <div class="big">Drop your CSV here, or click to choose a file</div>
+      <div class="small">Needs at least a customer name/ID column and a last-activity or last-purchase date column</div>
+      <input type="file" id="fileInput" accept=".csv">
+    </div>
+  </div>
+
+  <div class="card hidden" id="mapCard">
+    <div id="mapping"></div>
+    <div style="margin-top:6px;"><button id="runBtn">Analyze</button> <button class="ghost" id="cancelBtn">Choose different file</button></div>
+  </div>
+
+  <div id="results" class="hidden">
+    <div class="tabs">
+      <div class="tab active" data-tab="overview">Overview</div>
+      <div class="tab" data-tab="trends">Trends</div>
+      <div class="tab" data-tab="breakdown">Breakdown</div>
+      <div class="tab" data-tab="ai">AI Insights</div>
+    </div>
+
+    <div class="view active" id="view-overview">
+      <div class="kpis" id="kpis"></div>
+      <div class="card">
+        <div style="font-size:14px;color:var(--muted);margin-bottom:10px;">Risk distribution</div>
+        <canvas id="riskChart"></canvas>
+      </div>
+      <div class="card">
+        <div style="font-size:14px;color:var(--muted);margin-bottom:10px;">Customers most at risk</div>
+        <div class="tablewrap">
+          <table id="riskTable"><thead><tr><th>Customer</th><th>Last activity</th><th>Days inactive</th><th>Risk</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" id="view-trends">
+      <div class="card">
+        <div style="font-size:14px;color:var(--muted);margin-bottom:10px;">Last activity, by month</div>
+        <canvas id="trendChart"></canvas>
+        <p class="note">Shows how many customers' most recent activity falls in each month — a shrinking recent bar usually means engagement is dropping off.</p>
+      </div>
+    </div>
+
+    <div class="view" id="view-breakdown">
+      <div class="card">
+        <div style="font-size:14px;color:var(--muted);margin-bottom:10px;">Average risk by spend tier</div>
+        <canvas id="spendChart"></canvas>
+        <p class="note" id="spendNote"></p>
+      </div>
+    </div>
+
+    <div class="view" id="view-ai">
+      <div class="card">
+        <div style="font-size:14px;color:var(--muted);margin-bottom:14px;">AI-written analysis of this dataset</div>
+        <button id="genAiBtn">Generate AI insights</button>
+        <p class="note">This sends a summary of your data (counts and risk figures — not raw customer names) to Claude to generate a written analysis. Nothing is stored.</p>
+        <div id="aiOutput" style="margin-top:18px;"></div>
+      </div>
+    </div>
+
+    <button class="ghost" id="resetBtn" style="margin-top:10px;">Analyze another file</button>
+  </div>
+</div>
+
+<script>
+let rows = [], headers = [], riskChartInst=null, trendChartInst=null, spendChartInst=null, analyzedGlobal=[];
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+
+drop.addEventListener('click', () => fileInput.click());
+['dragover','dragleave','drop'].forEach(evt=>{
+  drop.addEventListener(evt, e=>{
+    e.preventDefault();
+    if(evt==='dragover') drop.classList.add('drag');
+    if(evt==='dragleave') drop.classList.remove('drag');
+    if(evt==='drop'){
+      drop.classList.remove('drag');
+      if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+    }
+  });
+});
+fileInput.addEventListener('change', e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); });
+
+function handleFile(file){
+  Papa.parse(file, {
+    header:true, skipEmptyLines:true,
+    complete: res=>{
+      rows = res.data; headers = res.meta.fields || [];
+      if(!rows.length || !headers.length){ alert('Could not read that file. Please check it is a valid CSV.'); return; }
+      buildMapping();
+    },
+    error: ()=> alert('Could not read that file. Please check it is a valid CSV.')
+  });
+}
+
+function buildMapping(){
+  document.getElementById('uploadCard').classList.add('hidden');
+  document.getElementById('mapCard').classList.remove('hidden');
+  const opts = () => `<option value="">— none —</option>` + headers.map(x=>`<option value="${x}">${x}</option>`).join('');
+  document.getElementById('mapping').innerHTML = `
+    <div class="map-row"><label>Customer name / ID</label><select id="colId">${opts()}</select></div>
+    <div class="map-row"><label>Last activity / purchase date</label><select id="colDate">${opts()}</select></div>
+    <div class="map-row"><label>Total spend (optional)</label><select id="colSpend">${opts()}</select></div>
+  `;
+  const guess = (patterns) => headers.find(h => patterns.some(p => h.toLowerCase().includes(p)));
+  const set = (id, g) => { if(g) document.getElementById(id).value = g; };
+  set('colId', guess(['name','id','customer']));
+  set('colDate', guess(['date','last','activity','purchase']));
+  set('colSpend', guess(['spend','revenue','amount','total']));
+}
+
+document.getElementById('cancelBtn').addEventListener('click', ()=>{
+  document.getElementById('mapCard').classList.add('hidden');
+  document.getElementById('uploadCard').classList.remove('hidden');
+  fileInput.value = '';
+});
+document.getElementById('resetBtn').addEventListener('click', ()=>location.reload());
+document.getElementById('runBtn').addEventListener('click', analyze);
+
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById('view-'+t.dataset.tab).classList.add('active');
+  });
+});
+
+function analyze(){
+  const colId = document.getElementById('colId').value;
+  const colDate = document.getElementById('colDate').value;
+  const colSpend = document.getElementById('colSpend').value;
+  if(!colId || !colDate){ alert('Please select at least a customer name/ID column and a date column.'); return; }
+
+  const now = new Date();
+  let spends = [];
+  const analyzed = rows.map(r=>{
+    const name = r[colId] || 'Unknown';
+    const dateVal = new Date(r[colDate]);
+    const daysInactive = isNaN(dateVal) ? null : Math.floor((now - dateVal) / 86400000);
+    let spend = colSpend ? parseFloat((r[colSpend]||'0').toString().replace(/[^0-9.\-]/g,'')) : null;
+    if(spend !== null && !isNaN(spend)) spends.push(spend);
+    return { name, dateVal, daysInactive, spend };
+  }).filter(r => r.daysInactive !== null);
+
+  const maxSpend = spends.length ? Math.max(...spends) : 0;
+  const allDays = analyzed.map(r=>r.daysInactive).sort((a,b)=>a-b);
+  const minDays = allDays[0], maxDays = allDays[allDays.length-1];
+  const daysRange = Math.max(maxDays - minDays, 1);
+
+  analyzed.forEach(r=>{
+    let recencyScore = (r.daysInactive - minDays) / daysRange;
+    let spendFactor = 0;
+    if(maxSpend > 0 && r.spend !== null && !isNaN(r.spend)) spendFactor = 1 - (r.spend / maxSpend);
+    let score = maxSpend > 0 ? (recencyScore*0.7 + spendFactor*0.3) : recencyScore;
+    r.risk = Math.round(score*100);
+    r.tier = r.risk >= 66 ? 'bad' : r.risk >= 33 ? 'warn' : 'good';
+  });
+  analyzedGlobal = analyzed;
+
+  const total = analyzed.length;
+  const bad = analyzed.filter(r=>r.tier==='bad').length;
+  const warn = analyzed.filter(r=>r.tier==='warn').length;
+  const good = total - bad - warn;
+
+  document.getElementById('kpis').innerHTML = `
+    <div class="card kpi"><div class="n">${total}</div><div class="l">customers analyzed</div></div>
+    <div class="card kpi bad"><div class="n">${bad}</div><div class="l">high risk (${total?Math.round(bad/total*100):0}%)</div></div>
+    <div class="card kpi warn"><div class="n">${warn}</div><div class="l">watch list</div></div>
+    <div class="card kpi good"><div class="n">${good}</div><div class="l">healthy</div></div>
+  `;
+
+  if(riskChartInst) riskChartInst.destroy();
+  riskChartInst = new Chart(document.getElementById('riskChart'), {
+    type:'doughnut',
+    data:{ labels:['High risk','Watch list','Healthy'], datasets:[{ data:[bad,warn,good], backgroundColor:['#E0654F','#E3A23C','#3FB68B'], borderWidth:0 }] },
+    options:{ plugins:{ legend:{ position:'bottom', labels:{ color:'#EAEFF7', font:{size:12} } } } }
+  });
+
+  const top = [...analyzed].sort((a,b)=>b.risk-a.risk).slice(0,15);
+  document.getElementById('riskTable').querySelector('tbody').innerHTML = top.map(r=>`
+    <tr><td>${r.name}</td><td>${isNaN(r.dateVal)?'—':r.dateVal.toLocaleDateString()}</td><td>${r.daysInactive}</td><td><span class="tag ${r.tier}">${r.risk}</span></td></tr>
+  `).join('');
+
+  // Trends: bucket by month of last activity
+  const monthCounts = {};
+  analyzed.forEach(r=>{
+    if(isNaN(r.dateVal)) return;
+    const key = r.dateVal.getFullYear()+'-'+String(r.dateVal.getMonth()+1).padStart(2,'0');
+    monthCounts[key] = (monthCounts[key]||0)+1;
+  });
+  const monthKeys = Object.keys(monthCounts).sort();
+  if(trendChartInst) trendChartInst.destroy();
+  trendChartInst = new Chart(document.getElementById('trendChart'), {
+    type:'bar',
+    data:{ labels: monthKeys, datasets:[{ label:'Customers', data: monthKeys.map(k=>monthCounts[k]), backgroundColor:'#5B8CFF' }] },
+    options:{ scales:{ x:{ ticks:{color:'#8B98AC'}, grid:{color:'#243044'} }, y:{ ticks:{color:'#8B98AC'}, grid:{color:'#243044'} } }, plugins:{ legend:{ display:false } } }
+  });
+
+  // Breakdown: risk by spend tier (quartiles), if spend provided
+  const spendNote = document.getElementById('spendNote');
+  if(maxSpend > 0){
+    const withSpend = analyzed.filter(r=>r.spend!==null && !isNaN(r.spend)).sort((a,b)=>a.spend-b.spend);
+    const q = Math.ceil(withSpend.length/4);
+    const tiers = ['Lowest spend','Low-mid','Mid-high','Highest spend'];
+    const tierAvg = [0,1,2,3].map(i=>{
+      const slice = withSpend.slice(i*q, i*q+q);
+      if(!slice.length) return 0;
+      return Math.round(slice.reduce((s,r)=>s+r.risk,0)/slice.length);
+    });
+    if(spendChartInst) spendChartInst.destroy();
+    spendChartInst = new Chart(document.getElementById('spendChart'), {
+      type:'bar',
+      data:{ labels: tiers, datasets:[{ label:'Avg risk', data: tierAvg, backgroundColor:'#E3A23C' }] },
+      options:{ scales:{ x:{ ticks:{color:'#8B98AC'}, grid:{color:'#243044'} }, y:{ min:0,max:100, ticks:{color:'#8B98AC'}, grid:{color:'#243044'} } }, plugins:{ legend:{ display:false } } }
+    });
+    spendNote.textContent = 'Customers split into four equal-sized spend groups — this shows whether your lowest spenders are also your highest churn risk.';
+  } else {
+    spendNote.textContent = 'Add a spend column when uploading to see this breakdown.';
+    document.getElementById('spendChart').style.display='none';
+  }
+
+  document.getElementById('mapCard').classList.add('hidden');
+  document.getElementById('results').classList.remove('hidden');
+}
+
+// AI Insights via sample capability
+document.getElementById('genAiBtn').addEventListener('click', generateAI);
+async function generateAI(){
+  const btn = document.getElementById('genAiBtn');
+  const out = document.getElementById('aiOutput');
+  btn.disabled = true;
+  out.innerHTML = '<div class="ai-loading">Analyzing your data…</div>';
+
+  const total = analyzedGlobal.length;
+  const bad = analyzedGlobal.filter(r=>r.tier==='bad').length;
+  const warn = analyzedGlobal.filter(r=>r.tier==='warn').length;
+  const good = total - bad - warn;
+  const avgDays = Math.round(analyzedGlobal.reduce((s,r)=>s+r.daysInactive,0)/total);
+  const worst = [...analyzedGlobal].sort((a,b)=>b.risk-a.risk).slice(0,5).map(r=>`${r.daysInactive} days inactive, risk ${r.risk}`);
+
+  const summary = `Customer dataset summary:
+- Total customers: ${total}
+- High risk: ${bad} (${Math.round(bad/total*100)}%)
+- Watch list: ${warn}
+- Healthy: ${good}
+- Average days since last activity: ${avgDays}
+- Top 5 riskiest customer profiles: ${worst.join('; ')}
+
+Write a short, plain-language analysis (4-6 sentences) for a business owner: what's the overall health of this customer base, what's the biggest concern, and one practical recommendation. No headers, no bullet points, just a clear paragraph.`;
+
+  try{
+    if(typeof window.claude === 'undefined' || !window.claude || typeof window.claude.use !== 'function'){
+      out.innerHTML = '<div class="note">AI insights only work inside the Claude artifact viewer, not when this file is opened on its own or hosted elsewhere.</div>';
+      btn.disabled = false; return;
+    }
+    const sample = await window.claude.use('sample');
+    if(!sample){ out.innerHTML = '<div class="note">AI insights aren\'t available in this view.</div>'; btn.disabled=false; return; }
+    const result = await sample(summary, {
+      onText: ({text}) => { out.innerHTML = `<div class="ai-box">${text}</div>`; }
+    });
+    out.innerHTML = `<div class="ai-box">${result.text}</div>`;
+  } catch(err){
+    out.innerHTML = '<div class="note">Could not generate insights right now. Please try again.</div>';
+  }
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>
